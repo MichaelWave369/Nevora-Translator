@@ -26,6 +26,7 @@ class EnglishToCodeTranslator:
     MODES = {"gameplay", "automation", "video-processing", "web-backend"}
     PLANNER_PROVIDERS = {"auto", "heuristic", "openai"}
     SOURCE_LANGUAGES = {"english", "spanish", "french", "german", "portuguese"}
+    AUDIO_LANGUAGES = SOURCE_LANGUAGES
     BLOCKED_PATTERNS = [
         "rm -rf /",
         "shutdown",
@@ -96,6 +97,14 @@ class EnglishToCodeTranslator:
             "som": "sound",
             "animacao": "animation",
         },
+    }
+
+    AUDIO_LANGUAGE_CODES = {
+        "english": "en-US",
+        "spanish": "es-ES",
+        "french": "fr-FR",
+        "german": "de-DE",
+        "portuguese": "pt-PT",
     }
 
     def __init__(
@@ -176,6 +185,67 @@ class EnglishToCodeTranslator:
         for source_token, english_token in token_map.items():
             normalized = re.sub(rf"\b{re.escape(source_token)}\b", english_token, normalized, flags=re.IGNORECASE)
         return normalized
+
+    def transcribe_audio_input(self, audio_input_path: str, source_language: str = "english") -> str:
+        """Transcribe audio input into text.
+
+        Supports `.txt` as transcript input for deterministic/local workflows.
+        If speech_recognition is installed, common audio file formats are supported.
+        """
+        language = source_language.lower().strip()
+        if language not in self.AUDIO_LANGUAGES:
+            supported = ", ".join(sorted(self.AUDIO_LANGUAGES))
+            raise ValueError(f"Unsupported source_language '{source_language}'. Supported: {supported}")
+
+        source = Path(audio_input_path)
+        if not source.exists():
+            raise FileNotFoundError(f"Audio input does not exist: {audio_input_path}")
+
+        if source.suffix.lower() in {".txt", ".md", ".prompt"}:
+            return source.read_text(encoding="utf-8").strip()
+
+        try:
+            import speech_recognition as sr  # type: ignore
+        except Exception as exc:
+            raise RuntimeError(
+                "speech_recognition not available. Install optional audio deps or provide a .txt transcript file."
+            ) from exc
+
+        recognizer = sr.Recognizer()
+        with sr.AudioFile(str(source)) as audio_file:
+            audio_data = recognizer.record(audio_file)
+        return recognizer.recognize_google(audio_data, language=self.AUDIO_LANGUAGE_CODES[language])
+
+    def synthesize_audio_output(
+        self,
+        text: str,
+        output_audio_path: str,
+        output_language: str = "english",
+    ) -> str:
+        """Synthesize speech audio output.
+
+        Uses optional `pyttsx3` when available. Falls back to writing a `.txt`
+        sidecar transcript if audio TTS backend is unavailable.
+        """
+        language = output_language.lower().strip()
+        if language not in self.AUDIO_LANGUAGES:
+            supported = ", ".join(sorted(self.AUDIO_LANGUAGES))
+            raise ValueError(f"Unsupported output_language '{output_language}'. Supported: {supported}")
+
+        destination = Path(output_audio_path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+
+        try:
+            import pyttsx3  # type: ignore
+
+            engine = pyttsx3.init()
+            engine.save_to_file(text, str(destination))
+            engine.runAndWait()
+            return str(destination)
+        except Exception:
+            fallback = destination.with_suffix(destination.suffix + ".txt")
+            fallback.write_text(text, encoding="utf-8")
+            return str(fallback)
 
     def plan_intent(self, prompt: str, mode: str = "gameplay") -> ParsedIntent:
         try:

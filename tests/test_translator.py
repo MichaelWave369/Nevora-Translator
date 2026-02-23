@@ -9,7 +9,7 @@ from translator.planners.heuristic import HeuristicPlanner
 
 
 class BrokenPlanner:
-    def plan(self, prompt: str, mode: str = "gameplay") -> ParsedIntent:  # intentionally bad shape
+    def plan(self, prompt: str, mode: str = "gameplay") -> ParsedIntent:
         return ParsedIntent(entities=[1, 2], actions=["jump"], conditions=["when"], outputs=[])
 
 
@@ -293,3 +293,19 @@ def test_batch_report_contains_source_language_counts(tmp_path) -> None:
     payload = json.loads(Path(report).read_text(encoding="utf-8"))
     assert payload["source_language_counts"]["spanish"] == 1
     assert payload["source_language_counts"]["english"] == 1
+
+
+def test_audio_input_txt_transcript() -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    tmp = Path("/tmp/nevora_audio_prompt.txt")
+    tmp.write_text("Cuando jugador saltar", encoding="utf-8")
+    prompt = translator.transcribe_audio_input(str(tmp), source_language="spanish")
+    out = translator.translate(prompt, target="python", source_language="spanish")
+    assert "player" in out.lower()
+
+
+def test_audio_output_fallback_txt(tmp_path) -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    output_audio = tmp_path / "speech.wav"
+    written = translator.synthesize_audio_output("hello world", str(output_audio), output_language="english")
+    assert Path(written).exists()

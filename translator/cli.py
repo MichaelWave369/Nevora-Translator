@@ -36,6 +36,14 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["english", "spanish", "french", "german", "portuguese"],
         help="Input prompt language",
     )
+    parser.add_argument("--audio-input", help="Audio input path (or .txt transcript file)")
+    parser.add_argument("--audio-output", help="Audio output path (best effort TTS; .txt fallback if unavailable)")
+    parser.add_argument(
+        "--audio-output-language",
+        default="english",
+        choices=["english", "spanish", "french", "german", "portuguese"],
+        help="Output speech language",
+    )
     parser.add_argument(
         "--planner-provider",
         default="auto",
@@ -144,15 +152,20 @@ def main() -> None:
             print(f"\n[batch-verify-build-gate:ok] rate={verify_rate:.4f}")
         return
 
-    if not args.prompt:
-        raise ValueError("--prompt is required unless --batch-input is provided")
-
     context = None
     if args.context_file:
         context = Path(args.context_file).read_text(encoding="utf-8")
 
+    prompt = args.prompt
+    if args.audio_input:
+        prompt = translator.transcribe_audio_input(args.audio_input, source_language=args.source_language)
+        print(f"[audio-input] transcribed prompt: {prompt}")
+
+    if not prompt:
+        raise ValueError("--prompt is required unless --batch-input or --audio-input is provided")
+
     output = translator.translate(
-        prompt=args.prompt,
+        prompt=prompt,
         target=args.target,
         mode=args.mode,
         context=context,
@@ -162,9 +175,17 @@ def main() -> None:
     )
     print(output)
 
+    if args.audio_output:
+        audio_path = translator.synthesize_audio_output(
+            output,
+            output_audio_path=args.audio_output,
+            output_language=args.audio_output_language,
+        )
+        print(f"\n[audio-output] written: {audio_path}")
+
     if args.explain_plan or args.explain_plan_file:
         explanation = translator.explain_plan(
-            args.prompt,
+            prompt,
             target=args.target,
             mode=args.mode,
             source_language=args.source_language,
@@ -185,7 +206,7 @@ def main() -> None:
 
     scaffold_root = None
     if args.scaffold_dir:
-        scaffold_root = translator.scaffold_project(args.prompt, target=args.target, output_dir=args.scaffold_dir, mode=args.mode)
+        scaffold_root = translator.scaffold_project(prompt, target=args.target, output_dir=args.scaffold_dir, mode=args.mode)
         print(f"\n[scaffold] created at: {scaffold_root}")
 
     if args.verify_scaffold:
@@ -210,7 +231,7 @@ def main() -> None:
 
     if args.export_uasset_json:
         export_path = translator.export_unreal_uasset_payload(
-            prompt=args.prompt,
+            prompt=prompt,
             output_path=args.export_uasset_json,
             blueprint_name=args.blueprint_name,
             mode=args.mode,

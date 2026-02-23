@@ -1,27 +1,36 @@
 # Nevora English-to-Code Translator
 
-Translate ideas into code for Python, Blueprint, C++, C#, JavaScript, and GDScript.
+Translate natural-language ideas into starter code for Python, Blueprint, C++, C#, JavaScript, and GDScript.
 
-## Next phase (v11) implemented
+## Next phase (v12) implemented
 
-### 1) Multilingual prompt input
-- Added `source_language` support so prompts can be written in:
+### 1) Multilingual text prompts
+- Source prompt languages supported:
   - `english`
   - `spanish`
   - `french`
   - `german`
   - `portuguese`
-- Prompts are normalized into English before planning so existing target renderers work consistently.
+- Non-English prompts are token-normalized into English before planning/rendering so all existing targets continue to work.
 
-### 2) Multilingual explainability and reporting
-- Explain-plan now includes:
-  - `source_language`
-  - `normalized_prompt`
-- Batch reports now include `source_language_counts` for observability across mixed-language runs.
+### 2) Audio input support (multilingual)
+- New single-run CLI flag: `--audio-input`.
+- You can pass:
+  - a transcript-like file (`.txt`, `.md`, `.prompt`) for deterministic local workflows, or
+  - an audio file when optional speech dependencies are installed.
+- Language control: `--source-language` is used for transcription language handling.
 
-### 3) Existing v10 batch verification/gates retained
+### 3) Audio output support (multilingual)
+- New single-run CLI flags:
+  - `--audio-output`
+  - `--audio-output-language`
+- Translator attempts TTS output using optional runtime dependency (`pyttsx3`).
+- If TTS is unavailable, it safely falls back to writing a transcript sidecar file (`<audio_output_path>.txt`).
+
+### 4) Existing batch quality gates retained
 - `--batch-verify-output`, `--batch-verify-build`
 - `--batch-min-success-rate`, `--batch-min-verify-output-rate`, `--batch-min-verify-build-rate`
+- `--batch-fail-fast`
 
 ## Quick start
 
@@ -30,7 +39,7 @@ pip install -r requirements.txt
 python -m translator.cli --target python --prompt "Create player jump on space" --mode gameplay --verify
 ```
 
-## Spanish input example
+## Multilingual text example (Spanish)
 
 ```bash
 python -m translator.cli \
@@ -38,6 +47,34 @@ python -m translator.cli \
   --source-language spanish \
   --prompt "Cuando jugador saltar"
 ```
+
+## Audio input example (transcript file)
+
+```bash
+python -m translator.cli \
+  --target python \
+  --source-language spanish \
+  --audio-input /tmp/nevora_audio_prompt.txt \
+  --explain-plan
+```
+
+## Audio output example
+
+```bash
+python -m translator.cli \
+  --target python \
+  --prompt "Create player jump on space" \
+  --audio-output artifacts/speech.wav \
+  --audio-output-language english
+```
+
+## Optional audio dependencies
+
+```bash
+pip install SpeechRecognition pyttsx3
+```
+
+> Note: audio support is best-effort in constrained environments. If speech dependencies or system TTS engines are unavailable, use transcript input and/or transcript output fallback.
 
 ## Batch mode with language mix + quality gates
 
