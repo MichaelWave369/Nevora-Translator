@@ -491,3 +491,35 @@ def test_claude_codegen_requires_api_key(monkeypatch) -> None:
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     with pytest.raises(RuntimeError):
         generate_code_with_claude("Create jump", target="python")
+
+
+def test_multi_codegen_openai_requires_key(monkeypatch) -> None:
+    from translator.generators.multi_codegen import generate_code_with_openai
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    with pytest.raises(RuntimeError):
+        generate_code_with_openai("Create jump", target="python")
+
+
+def test_multi_codegen_grok_requires_key(monkeypatch) -> None:
+    from translator.generators.multi_codegen import generate_code_with_grok
+
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    with pytest.raises(RuntimeError):
+        generate_code_with_grok("Create jump", target="python")
+
+
+def test_multi_codegen_gemini_requires_key(monkeypatch) -> None:
+    from translator.generators.multi_codegen import generate_code_with_gemini
+
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    with pytest.raises(RuntimeError):
+        generate_code_with_gemini("Create jump", target="python")
+
+
+def test_multi_codegen_dispatch_unknown_provider() -> None:
+    from translator.generators.multi_codegen import generate_code
+
+    with pytest.raises(ValueError):
+        generate_code("unknown", "Create jump", target="python")
