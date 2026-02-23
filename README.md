@@ -2,7 +2,7 @@
 
 Nevora converts natural-language prompts into starter code for multiple targets (`python`, `blueprint`, `cpp`, `csharp`, `javascript`, `gdscript`) with optional AI planners, batch workflows, and engine asset integration.
 
-## Next phase (v21) implemented
+## Next phase (v22) implemented
 
 ### 1) MVP free-LLM planner path (Hugging Face)
 - Added `HuggingFaceSemanticPlanner` (`translator/planners/huggingface_planner.py`) using HF text2text generation.
@@ -65,6 +65,19 @@ Nevora converts natural-language prompts into starter code for multiple targets 
   - `XAI_API_KEY` (Grok)
   - `GEMINI_API_KEY` or `GOOGLE_API_KEY` (Gemini)
   - `OLLAMA_BASE_URL` (optional local endpoint)
+
+
+### 11) Visual category menu for non-technical users
+- Added clickable visual category cards before the prompt box:
+  - 🎮 Game Mechanics
+  - 🌍 World Building
+  - 🤖 AI & NPCs
+  - 🎨 Visual Effects
+  - 🔧 Automation
+  - 🌐 Web & Apps
+- Selecting a category shows a second row of example prompt buttons.
+- Clicking an example auto-fills the prompt box.
+- Manual typing still works through the same prompt text area.
 
 ## Installation
 
