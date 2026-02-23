@@ -1,0 +1,19 @@
+{
+  "prompt": "Spawn enemy and play hit sound",
+  "engine": "unreal",
+  "target": "python",
+  "selected_assets": [
+    {
+      "id": "SM_Enemy",
+      "name": "Enemy Mesh",
+      "tags": ["enemy", "mesh"],
+      "path": "/Game/Meshes/SM_Enemy"
+    },
+    {
+      "id": "SFX_Hit",
+      "name": "Hit Sound",
+      "tags": ["hit", "sound"],
+      "path": "/Game/Audio/SFX_Hit"
+    }
+  ]
+}
