@@ -2,7 +2,7 @@
 
 Translate natural-language ideas into starter code for Python, Blueprint, C++, C#, JavaScript, and GDScript.
 
-## Next phase (v15) implemented
+## Next phase (v16) implemented
 
 ### 1) Full optimization pass
 - Added fast plan reuse with an internal plan cache (`_plan_cache`) to avoid repeated planning work for identical prompt/mode combinations.
@@ -37,6 +37,17 @@ Translate natural-language ideas into starter code for Python, Blueprint, C++, C
   - `--assistant-guide`
   - `--assistant-report <batch_report.json>`
   - `--warm-cache-file <prompts.txt>`
+  - `--assistant-report-advice`
+
+
+### 6) Assistant-driven optimization advisor
+- Added report-aware optimization advisor:
+  - `analyze_batch_report(...)` summarizes speed/quality health and returns optimization recommendations.
+  - `suggest_swarm_workers(...)` auto-suggests concurrency based on batch size and available CPU.
+- Added CLI support:
+  - `--assistant-report-advice` (requires `--assistant-report`)
+  - `--swarm-workers 0` now means auto-select workers.
+- Batch reports now include `p95_elapsed_ms` for tail-latency visibility.
 
 ## Asset library format
 

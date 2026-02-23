@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -497,6 +498,42 @@ class EnglishToCodeTranslator:
         destination.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
         return str(destination)
 
+    def suggest_swarm_workers(self, batch_size: int, max_workers: int = 8) -> int:
+        if batch_size <= 0:
+            return 1
+        cpu_count = os.cpu_count() or 2
+        return max(1, min(batch_size, max_workers, cpu_count))
+
+    def analyze_batch_report(self, report: dict[str, Any]) -> dict[str, Any]:
+        success_rate = float(report.get("success_rate", 0.0))
+        avg_elapsed_ms = float(report.get("avg_elapsed_ms", 0.0))
+        verify_output_rate = float(report.get("verify_output_rate", 0.0))
+        verify_build_rate = float(report.get("verify_build_rate", 0.0))
+        total = int(report.get("total", 0))
+
+        recommendations: list[str] = []
+        if success_rate < 1.0:
+            recommendations.append("Enable --batch-fail-fast while debugging failing prompts to reduce wasted runtime.")
+        if verify_output_rate < 1.0:
+            recommendations.append("Use clearer constraints in prompts and keep --batch-verify-output enabled to improve syntax quality.")
+        if verify_build_rate < 1.0:
+            recommendations.append("Review scaffold dependencies/toolchain and keep --batch-verify-build to gate buildability.")
+        if avg_elapsed_ms > 250:
+            recommendations.append("Consider increasing --swarm-workers and pre-warming prompts with --warm-cache-file.")
+        if not recommendations:
+            recommendations.append("Pipeline health is strong; increase batch volume and keep gates enabled for regression protection.")
+
+        suggested_workers = self.suggest_swarm_workers(total)
+        return {
+            "total": total,
+            "success_rate": success_rate,
+            "avg_elapsed_ms": avg_elapsed_ms,
+            "verify_output_rate": verify_output_rate,
+            "verify_build_rate": verify_build_rate,
+            "suggested_swarm_workers": suggested_workers,
+            "recommendations": recommendations,
+        }
+
     def warm_plan_cache(self, prompts: list[str], mode: str = "gameplay", source_language: str = "english") -> dict[str, Any]:
         warmed = 0
         for prompt in prompts:
@@ -543,11 +580,13 @@ class EnglishToCodeTranslator:
         suggestions.append(quality_tip)
 
         report_summary = None
+        report_advice = None
         if batch_report:
             report_summary = {
                 "success_rate": batch_report.get("success_rate", 0.0),
                 "avg_elapsed_ms": batch_report.get("avg_elapsed_ms", 0.0),
             }
+            report_advice = self.analyze_batch_report(batch_report)
             if float(batch_report.get("success_rate", 0.0)) < 1.0:
                 suggestions.append("Batch report indicates failures; inspect per-item errors and consider --batch-fail-fast during debugging.")
 
@@ -571,6 +610,7 @@ class EnglishToCodeTranslator:
             },
             "suggestions": suggestions,
             "report_summary": report_summary,
+            "report_advice": report_advice,
             "suggested_command": suggested_command,
         }
 
@@ -792,7 +832,7 @@ class EnglishToCodeTranslator:
                 lattice_bucket_counts[key] = lattice_bucket_counts.get(key, 0) + 1
 
         total = len(batch_results)
-        elapsed_values = [float(item.get("elapsed_ms", 0.0)) for item in batch_results if item.get("ok") and item.get("elapsed_ms") is not None]
+        elapsed_values = sorted(float(item.get("elapsed_ms", 0.0)) for item in batch_results if item.get("ok") and item.get("elapsed_ms") is not None)
         success_rate = (ok_count / total) if total else 0.0
         verify_output_rate = (verify_output_ok_count / total) if total else 0.0
         verify_build_rate = (verify_build_ok_count / total) if total else 0.0
@@ -812,6 +852,7 @@ class EnglishToCodeTranslator:
             "lattice_shape": list(self.lattice_shape),
             "lattice_bucket_counts": lattice_bucket_counts,
             "avg_elapsed_ms": round(sum(elapsed_values) / len(elapsed_values), 3) if elapsed_values else 0.0,
+            "p95_elapsed_ms": round(elapsed_values[min(len(elapsed_values) - 1, int(0.95 * (len(elapsed_values) - 1)))], 3) if elapsed_values else 0.0,
             "results": batch_results,
         }
         destination.write_text(json.dumps(summary, indent=2), encoding="utf-8")

@@ -47,6 +47,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--assistant-guide", action="store_true", help="Print AI assistant guidance for prompt/system usage")
     parser.add_argument("--assistant-report", help="Optional batch report JSON path used by assistant guidance")
     parser.add_argument("--warm-cache-file", help="Optional text file with one prompt per line to pre-warm plan cache")
+    parser.add_argument("--assistant-report-advice", action="store_true", help="Print optimization advice derived from --assistant-report")
     parser.add_argument(
         "--audio-output-language",
         default="english",
@@ -118,6 +119,8 @@ def main() -> None:
 
     if args.batch_input:
         items = _load_batch_items(args.batch_input)
+        resolved_workers = translator.suggest_swarm_workers(len(items)) if args.swarm_workers <= 0 else max(1, args.swarm_workers)
+        print(f"[swarm-workers] using: {resolved_workers}")
         results = translator.translate_batch(
             items,
             default_target=args.target,
@@ -129,7 +132,7 @@ def main() -> None:
             verify_generated=args.batch_verify_output,
             verify_build=args.batch_verify_build,
             default_source_language=args.source_language,
-            swarm_workers=max(1, args.swarm_workers),
+            swarm_workers=resolved_workers,
         )
         print(json.dumps(results, indent=2))
         if args.batch_report:

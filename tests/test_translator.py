@@ -408,3 +408,46 @@ def test_warm_plan_cache_counts_entries() -> None:
     result = translator.warm_plan_cache(["Create jump", "Create jump", "Spawn enemy"], mode="gameplay")
     assert result["cache_size"] >= 2
     assert result["warmed"] >= 2
+
+
+def test_suggest_swarm_workers_bounds() -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    workers = translator.suggest_swarm_workers(batch_size=100, max_workers=4)
+    assert 1 <= workers <= 4
+
+
+def test_analyze_batch_report_recommendations() -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    advice = translator.analyze_batch_report(
+        {
+            "total": 10,
+            "success_rate": 0.7,
+            "avg_elapsed_ms": 300.0,
+            "verify_output_rate": 0.8,
+            "verify_build_rate": 0.9,
+        }
+    )
+    assert advice["suggested_swarm_workers"] >= 1
+    assert advice["recommendations"]
+
+
+def test_assistant_guide_includes_report_advice() -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    guide = translator.assistant_guide(
+        prompt="Create player jump",
+        target="python",
+        batch_report={"total": 3, "success_rate": 1.0, "avg_elapsed_ms": 10.0, "verify_output_rate": 1.0, "verify_build_rate": 1.0},
+    )
+    assert guide["report_advice"] is not None
+
+
+def test_write_batch_report_includes_p95(tmp_path) -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    results = [
+        {"index": 0, "ok": True, "target": "python", "mode": "gameplay", "elapsed_ms": 10.0},
+        {"index": 1, "ok": True, "target": "python", "mode": "gameplay", "elapsed_ms": 30.0},
+        {"index": 2, "ok": True, "target": "python", "mode": "gameplay", "elapsed_ms": 50.0},
+    ]
+    report_path = translator.write_batch_report(results, str(tmp_path / "batch.json"))
+    payload = json.loads(Path(report_path).read_text(encoding="utf-8"))
+    assert "p95_elapsed_ms" in payload
