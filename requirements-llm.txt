@@ -1,0 +1,8 @@
+openai>=1.52.0
+transformers>=4.45.0
+torch>=2.4.0
+accelerate>=0.34.2
+anthropic>=0.34.2
+google-generativeai>=0.8.3
+requests>=2.32.3
+pygame>=2.6.0

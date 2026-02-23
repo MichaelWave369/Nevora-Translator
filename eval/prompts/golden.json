@@ -1,0 +1,26 @@
+[
+  {
+    "prompt": "Create a player jump on space and play sound",
+    "target": "python",
+    "mode": "gameplay",
+    "must_contain": ["GeneratedFeature", "Actions", "IR:"],
+    "intent_tokens": ["jump", "play"],
+    "reference": "GeneratedFeature player jump play Actions"
+  },
+  {
+    "prompt": "Spawn enemy when timer reaches zero",
+    "target": "cpp",
+    "mode": "gameplay",
+    "must_contain": ["GeneratedFeature", "Run"],
+    "intent_tokens": ["spawn", "timer"],
+    "reference": "GeneratedFeature enemy spawn timer Run"
+  },
+  {
+    "prompt": "When request arrives validate and respond",
+    "target": "javascript",
+    "mode": "web-backend",
+    "must_contain": ["GeneratedFeature", "Mode: web-backend"],
+    "intent_tokens": ["validate", "respond"],
+    "reference": "GeneratedFeature request validate respond web-backend"
+  }
+]
