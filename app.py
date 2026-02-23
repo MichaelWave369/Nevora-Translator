@@ -3,7 +3,9 @@ from __future__ import annotations
 import streamlit as st
 
 from translator.core import EnglishToCodeTranslator
+from translator.generators.anthropic_codegen import explain_code_with_claude
 from translator.generators.multi_codegen import generate_code
+from translator.generators.project_packager import package_single_file_project, package_world_builder_project
 from translator.generators.world_builder import generate_structured_project_with_claude
 
 
@@ -320,6 +322,20 @@ if ui_mode == "Quick Generate":
         st.subheader("Generated Output")
         st.code(output)
 
+        zip_bytes = package_single_file_project(
+            code=output,
+            prompt=prompt,
+            target=target,
+            include_pygame=False,
+        )
+        st.download_button(
+            "Download My Project",
+            data=zip_bytes,
+            file_name="nevora_project.zip",
+            mime="application/zip",
+            use_container_width=True,
+        )
+
         st.markdown("### Copy code")
         st.components.v1.html(
             f"""
@@ -338,6 +354,17 @@ if ui_mode == "Quick Generate":
             )
             st.subheader("Assistant Guide")
             st.json(guide)
+
+        st.subheader("Explain My Code")
+        try:
+            explanation = explain_code_with_claude(
+                code=output,
+                user_goal=prompt,
+                model=model_name or "claude-haiku-4-5",
+            )
+            st.markdown(explanation)
+        except Exception as exc:
+            st.info(f"Code explanation unavailable right now: {exc}")
 
 else:
     st.markdown("## 🌍 World Builder")
@@ -411,6 +438,38 @@ else:
             """,
             height=320,
         )
+
+        world_files = {
+            "section_one.py": sections["section_one"],
+            "section_two.py": sections["section_two"],
+            "section_three.py": sections["section_three"],
+            "section_four.py": sections["section_four"],
+            "main.py": sections["main"],
+        }
+        world_summary = " | ".join(f"{title}: {value}" for title, value in stage_values)
+        world_zip = package_world_builder_project(
+            files=world_files,
+            project_title=f"Nevora {selected_project['label']}",
+            app_summary=world_summary,
+        )
+        st.download_button(
+            "Download My Project",
+            data=world_zip,
+            file_name="nevora_world_project.zip",
+            mime="application/zip",
+            use_container_width=True,
+        )
+
+        st.subheader("Explain My Code")
+        try:
+            explanation = explain_code_with_claude(
+                code=combined,
+                user_goal=world_summary,
+                model=model_name or "claude-haiku-4-5",
+            )
+            st.markdown(explanation)
+        except Exception as exc:
+            st.info(f"Code explanation unavailable right now: {exc}")
 
 st.caption(
     "Tip: run with `streamlit run app.py`. Keys: ANTHROPIC_API_KEY, OPENAI_API_KEY, XAI_API_KEY, GEMINI_API_KEY; local Ollama uses OLLAMA_BASE_URL."

@@ -572,3 +572,58 @@ def test_world_builder_parse_legacy_format() -> None:
     parsed = parse_world_builder_response(legacy)
     assert parsed["section_one"] == "env"
     assert parsed["section_four"] == "events"
+
+
+def test_claude_explain_requires_api_key(monkeypatch) -> None:
+    from translator.generators.anthropic_codegen import explain_code_with_claude
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    with pytest.raises(RuntimeError):
+        explain_code_with_claude("print('hello')", user_goal="say hello")
+
+
+def test_package_single_file_project_contains_required_files() -> None:
+    import io
+    import zipfile
+
+    from translator.generators.project_packager import package_single_file_project
+
+    payload = package_single_file_project(
+        code="print('hello')\n",
+        prompt="Say hello",
+        target="python",
+    )
+    with zipfile.ZipFile(io.BytesIO(payload), "r") as zf:
+        names = set(zf.namelist())
+        assert "main.py" in names
+        assert "README.txt" in names
+        assert "requirements.txt" in names
+        assert "run.bat" in names
+        assert "run.sh" in names
+
+
+def test_package_world_builder_project_contains_required_files() -> None:
+    import io
+    import zipfile
+
+    from translator.generators.project_packager import package_world_builder_project
+
+    files = {
+        "section_one.py": "# env",
+        "section_two.py": "# chars",
+        "section_three.py": "# rules",
+        "section_four.py": "# events",
+        "main.py": "print('run')",
+    }
+    payload = package_world_builder_project(
+        files=files,
+        project_title="Nevora Game World",
+        app_summary="simple world",
+    )
+    with zipfile.ZipFile(io.BytesIO(payload), "r") as zf:
+        names = set(zf.namelist())
+        assert set(files.keys()).issubset(names)
+        assert "README.txt" in names
+        assert "requirements.txt" in names
+        assert "run.bat" in names
+        assert "run.sh" in names

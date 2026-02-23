@@ -118,6 +118,16 @@ Nevora converts natural-language prompts into starter code for multiple targets 
     4. What should it show or tell you?
 - Build button now adapts (`Build My World` or `Build My App`) and sends all 4 stages to Claude as one structured request.
 
+
+### 14) One-click project download + beginner code explanations
+- After generation, users can click **Download My Project** to get a ready-to-open `.zip` package.
+- The package includes:
+  - generated code file(s),
+  - `README.txt` written in plain English,
+  - `requirements.txt`,
+  - `run.bat` (Windows) and `run.sh` (Mac/Linux).
+- Added **Explain My Code** below outputs so Claude can explain the generated code like a teacher for first-time coders.
+
 ## Installation
 
 ```bash
