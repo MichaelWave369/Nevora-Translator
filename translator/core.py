@@ -197,6 +197,9 @@ class EnglishToCodeTranslator:
         strict_safety: bool = False,
         artifact_dir: str | None = None,
         include_explain: bool = False,
+        fail_fast: bool = False,
+        verify_generated: bool = False,
+        verify_build: bool = False,
     ) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
         artifacts_root = Path(artifact_dir) if artifact_dir else None
@@ -228,20 +231,40 @@ class EnglishToCodeTranslator:
                     "output": output,
                 }
 
+                if verify_generated:
+                    verify_ok, verify_message = self.verify_output(output, target)
+                    payload["verify_output_ok"] = verify_ok
+                    payload["verify_output_message"] = verify_message
+
                 if include_explain:
                     payload["explain"] = self.explain_plan(prompt, target=target, mode=mode)
 
+                scaffold_root: Path | None = None
                 if artifacts_root:
                     item_dir = artifacts_root / f"{idx:03d}_{self._slug(prompt)}"
                     item_dir.mkdir(parents=True, exist_ok=True)
                     output_file = item_dir / f"output.{target}.txt"
                     output_file.write_text(output, encoding="utf-8")
                     payload["artifact_output_file"] = str(output_file)
+                    scaffold_root = item_dir / "scaffold"
 
                     if include_explain:
                         explain_file = item_dir / "plan.json"
                         explain_file.write_text(json.dumps(payload["explain"], indent=2), encoding="utf-8")
                         payload["artifact_plan_file"] = str(explain_file)
+
+                if verify_build:
+                    if scaffold_root is None:
+                        import tempfile
+
+                        with tempfile.TemporaryDirectory(prefix="nevora-batch-scaffold-") as td:
+                            self.scaffold_project(prompt, target=target, output_dir=td, mode=mode)
+                            build_ok, build_message = self.verify_scaffold_build(td, target)
+                    else:
+                        self.scaffold_project(prompt, target=target, output_dir=str(scaffold_root), mode=mode)
+                        build_ok, build_message = self.verify_scaffold_build(str(scaffold_root), target)
+                    payload["verify_build_ok"] = build_ok
+                    payload["verify_build_message"] = build_message
 
                 results.append(payload)
             except Exception as exc:
@@ -255,16 +278,42 @@ class EnglishToCodeTranslator:
                         "error": str(exc),
                     }
                 )
+                if fail_fast:
+                    break
         return results
 
     def write_batch_report(self, batch_results: list[dict[str, Any]], output_file: str) -> str:
         destination = Path(output_file)
         destination.parent.mkdir(parents=True, exist_ok=True)
+        ok_count = sum(1 for r in batch_results if r.get("ok"))
+        failed_count = sum(1 for r in batch_results if not r.get("ok"))
+        verify_output_ok_count = sum(1 for r in batch_results if r.get("verify_output_ok") is True)
+        verify_build_ok_count = sum(1 for r in batch_results if r.get("verify_build_ok") is True)
+
+        target_counts: dict[str, int] = {}
+        provider_counts: dict[str, int] = {}
+        for item in batch_results:
+            target = str(item.get("target", "unknown"))
+            provider = str(item.get("resolved_provider", "unknown"))
+            target_counts[target] = target_counts.get(target, 0) + 1
+            provider_counts[provider] = provider_counts.get(provider, 0) + 1
+
+        total = len(batch_results)
+        success_rate = (ok_count / total) if total else 0.0
+        verify_output_rate = (verify_output_ok_count / total) if total else 0.0
+        verify_build_rate = (verify_build_ok_count / total) if total else 0.0
         summary = {
             "generated_at": datetime.now(timezone.utc).isoformat(),
-            "total": len(batch_results),
-            "ok": sum(1 for r in batch_results if r.get("ok")),
-            "failed": sum(1 for r in batch_results if not r.get("ok")),
+            "total": total,
+            "ok": ok_count,
+            "failed": failed_count,
+            "success_rate": round(success_rate, 4),
+            "verify_output_ok": verify_output_ok_count,
+            "verify_build_ok": verify_build_ok_count,
+            "verify_output_rate": round(verify_output_rate, 4),
+            "verify_build_rate": round(verify_build_rate, 4),
+            "target_counts": target_counts,
+            "resolved_provider_counts": provider_counts,
             "results": batch_results,
         }
         destination.write_text(json.dumps(summary, indent=2), encoding="utf-8")
@@ -388,7 +437,7 @@ class EnglishToCodeTranslator:
             src = root / "src" / "generatedFeature.js"
             if not src.exists():
                 return False, "missing src/generatedFeature.js"
-            proc = subprocess.run(["node", "--check", str(src)], cwd=root, capture_output=True, text=True)
+            proc = subprocess.run(["node", "--check", "src/generatedFeature.js"], cwd=root, capture_output=True, text=True)
             return proc.returncode == 0, (proc.stdout.strip() or proc.stderr.strip() or "node check ok")
 
         if target == "cpp":
@@ -397,7 +446,7 @@ class EnglishToCodeTranslator:
             src = root / "main.cpp"
             if not src.exists():
                 return False, "missing main.cpp"
-            proc = subprocess.run(["clang++", "-fsyntax-only", str(src)], cwd=root, capture_output=True, text=True)
+            proc = subprocess.run(["clang++", "-fsyntax-only", "main.cpp"], cwd=root, capture_output=True, text=True)
             return proc.returncode == 0, (proc.stdout.strip() or proc.stderr.strip() or "clang++ syntax ok")
 
         if target == "csharp":

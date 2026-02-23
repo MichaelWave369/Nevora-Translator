@@ -53,8 +53,26 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--explain-plan-file", help="Optional file path to write explain-plan JSON")
     parser.add_argument("--batch-input", help="Path to JSON/JSONL batch prompts")
     parser.add_argument("--batch-report", help="Path to write batch run report JSON")
+    parser.add_argument("--batch-fail-fast", action="store_true", help="Stop batch processing on first failed item")
+    parser.add_argument(
+        "--batch-min-success-rate",
+        type=float,
+        help="Optional required minimum batch success rate (0.0-1.0); exits non-zero if unmet",
+    )
     parser.add_argument("--batch-artifact-dir", help="Folder to store per-item batch output artifacts")
     parser.add_argument("--batch-include-explain", action="store_true", help="Include explain payload for each batch item")
+    parser.add_argument("--batch-verify-output", action="store_true", help="Run verify_output for each successful batch item")
+    parser.add_argument("--batch-verify-build", action="store_true", help="Run scaffold build verification for each successful batch item")
+    parser.add_argument(
+        "--batch-min-verify-output-rate",
+        type=float,
+        help="Optional minimum verify_output pass rate (0.0-1.0)",
+    )
+    parser.add_argument(
+        "--batch-min-verify-build-rate",
+        type=float,
+        help="Optional minimum verify_build pass rate (0.0-1.0)",
+    )
     return parser
 
 
@@ -73,11 +91,50 @@ def main() -> None:
             strict_safety=args.strict_safety,
             artifact_dir=args.batch_artifact_dir,
             include_explain=args.batch_include_explain,
+            fail_fast=args.batch_fail_fast,
+            verify_generated=args.batch_verify_output,
+            verify_build=args.batch_verify_build,
         )
         print(json.dumps(results, indent=2))
         if args.batch_report:
             destination = translator.write_batch_report(results, args.batch_report)
             print(f"\n[batch-report] written: {destination}")
+
+        if args.batch_min_success_rate is not None:
+            if not (0.0 <= args.batch_min_success_rate <= 1.0):
+                raise ValueError("--batch-min-success-rate must be between 0.0 and 1.0")
+            total = len(results)
+            ok = sum(1 for r in results if r.get("ok"))
+            success_rate = (ok / total) if total else 0.0
+            if success_rate < args.batch_min_success_rate:
+                raise SystemExit(
+                    f"Batch success rate gate failed: {success_rate:.4f} < {args.batch_min_success_rate:.4f}"
+                )
+            print(f"\n[batch-gate:ok] success_rate={success_rate:.4f}")
+
+        if args.batch_min_verify_output_rate is not None:
+            if not (0.0 <= args.batch_min_verify_output_rate <= 1.0):
+                raise ValueError("--batch-min-verify-output-rate must be between 0.0 and 1.0")
+            total = len(results)
+            ok = sum(1 for r in results if r.get("verify_output_ok") is True)
+            verify_rate = (ok / total) if total else 0.0
+            if verify_rate < args.batch_min_verify_output_rate:
+                raise SystemExit(
+                    f"Batch verify-output gate failed: {verify_rate:.4f} < {args.batch_min_verify_output_rate:.4f}"
+                )
+            print(f"\n[batch-verify-output-gate:ok] rate={verify_rate:.4f}")
+
+        if args.batch_min_verify_build_rate is not None:
+            if not (0.0 <= args.batch_min_verify_build_rate <= 1.0):
+                raise ValueError("--batch-min-verify-build-rate must be between 0.0 and 1.0")
+            total = len(results)
+            ok = sum(1 for r in results if r.get("verify_build_ok") is True)
+            verify_rate = (ok / total) if total else 0.0
+            if verify_rate < args.batch_min_verify_build_rate:
+                raise SystemExit(
+                    f"Batch verify-build gate failed: {verify_rate:.4f} < {args.batch_min_verify_build_rate:.4f}"
+                )
+            print(f"\n[batch-verify-build-gate:ok] rate={verify_rate:.4f}")
         return
 
     if not args.prompt:

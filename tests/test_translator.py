@@ -183,3 +183,78 @@ def test_batch_report_contains_generated_at(tmp_path) -> None:
     report = translator.write_batch_report(results, str(tmp_path / "batch.json"))
     payload = json.loads(Path(report).read_text(encoding="utf-8"))
     assert "generated_at" in payload
+
+
+def test_batch_fail_fast_stops_after_first_error() -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    batch = [
+        {"prompt": "Please run rm -rf / immediately", "target": "python"},
+        {"prompt": "Create a player that can jump", "target": "python"},
+    ]
+    results = translator.translate_batch(
+        batch,
+        default_target="python",
+        strict_safety=True,
+        fail_fast=True,
+    )
+    assert len(results) == 1
+    assert results[0]["ok"] is False
+
+
+def test_batch_report_contains_rates_and_counts(tmp_path) -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    results = [
+        {"index": 0, "ok": True, "target": "python", "mode": "gameplay", "resolved_provider": "heuristic"},
+        {"index": 1, "ok": False, "target": "cpp", "mode": "gameplay", "resolved_provider": "heuristic-fallback"},
+    ]
+    report = translator.write_batch_report(results, str(tmp_path / "batch.json"))
+    payload = json.loads(Path(report).read_text(encoding="utf-8"))
+    assert payload["success_rate"] == 0.5
+    assert payload["target_counts"]["python"] == 1
+    assert payload["target_counts"]["cpp"] == 1
+    assert payload["resolved_provider_counts"]["heuristic"] == 1
+
+
+def test_batch_translate_with_verify_flags(tmp_path) -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    batch = [{"prompt": "Create a player that can jump", "target": "python"}]
+    results = translator.translate_batch(
+        batch,
+        default_target="python",
+        verify_generated=True,
+        verify_build=True,
+        artifact_dir=str(tmp_path / "artifacts"),
+    )
+    assert len(results) == 1
+    assert results[0]["verify_output_ok"] is True
+    assert "verify_build_ok" in results[0]
+
+
+def test_batch_report_contains_verify_metrics(tmp_path) -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    results = [
+        {
+            "index": 0,
+            "ok": True,
+            "target": "python",
+            "mode": "gameplay",
+            "resolved_provider": "heuristic",
+            "verify_output_ok": True,
+            "verify_build_ok": True,
+        },
+        {
+            "index": 1,
+            "ok": False,
+            "target": "cpp",
+            "mode": "gameplay",
+            "resolved_provider": "heuristic-fallback",
+            "verify_output_ok": False,
+            "verify_build_ok": False,
+        },
+    ]
+    report = translator.write_batch_report(results, str(tmp_path / "batch_verify.json"))
+    payload = json.loads(Path(report).read_text(encoding="utf-8"))
+    assert payload["verify_output_ok"] == 1
+    assert payload["verify_build_ok"] == 1
+    assert payload["verify_output_rate"] == 0.5
+    assert payload["verify_build_rate"] == 0.5
