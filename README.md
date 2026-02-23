@@ -1,61 +1,67 @@
-# Natural Language-to-Code Translator NL2CT
+# Nevora English-to-Code Translator
 
 Translate natural-language ideas into starter code for Python, Blueprint, C++, C#, JavaScript, and GDScript.
 
-## Next phase (v13) implemented
+## Next phase (v14) implemented
 
-### 1) Speed optimization with lattice RAG cache
-- Added a lightweight in-memory retrieval cache keyed by a **12x12x12x12 lattice** bucket.
-- Each translation can store/retrieve nearby prior generations to reuse context and reduce repeated planning overhead on similar prompts.
-- Batch reports now include `lattice_shape` and `lattice_bucket_counts` for observability.
+### 1) Full optimization pass
+- Added fast plan reuse with an internal plan cache (`_plan_cache`) to avoid repeated planning work for identical prompt/mode combinations.
+- Added per-item latency tracking (`elapsed_ms`) and report aggregation (`avg_elapsed_ms`) for batch profiling.
 
-### 2) AI swarm batch execution
-- Batch translation now supports parallel workers for swarm execution via `swarm_workers` (CLI: `--swarm-workers`).
-- Maintains deterministic output ordering by original item index while executing items concurrently.
+### 2) AI swarm + speed features retained
+- Parallel batch execution with `--swarm-workers`.
+- Optional 12x12x12x12 lattice RAG acceleration with `--enable-rag-cache`.
+- VM-like sandbox execution with `--sandbox-command`.
 
-### 3) VM-like sandbox command execution
-- Added `run_in_vm_sandbox(...)` for isolated command execution in a temporary working directory with timeout protection.
-- CLI support: `--sandbox-command ...` to run quick validation/safety tasks in the sandbox flow.
+### 3) Unreal/Unity asset manager integration
+- New engine-aware generation path that can use a **user asset library JSON**:
+  - `translate_with_asset_library(...)`
+  - `export_engine_asset_manifest(...)`
+- Supports `engine=unreal` and `engine=unity`.
+- Asset matching uses prompt/token overlap and tag weighting to select best assets from the user’s library.
 
-### 4) Multilingual + audio pipeline retained
-- Multilingual prompt normalization (English/Spanish/French/German/Portuguese).
-- Audio input (`--audio-input`) with transcript-file fallback.
-- Audio output (`--audio-output`) with `.txt` fallback when TTS is unavailable.
+### 4) CLI support for engine asset flows
+- Added:
+  - `--engine {unreal,unity}`
+  - `--asset-library <path>`
+  - `--asset-budget <n>`
+  - `--export-engine-manifest <path>`
+- When engine/library args are provided, CLI prints selected assets and can emit engine manifest JSON.
 
-## Quick start
+## Asset library format
 
-```bash
-pip install -r requirements.txt
-python -m translator.cli --target python --prompt "Create player jump on space" --mode gameplay --verify
+```json
+{
+  "unreal": [
+    {"id": "SM_Enemy", "name": "Enemy Mesh", "tags": ["enemy", "mesh"], "path": "/Game/Meshes/SM_Enemy"}
+  ],
+  "unity": [
+    {"id": "PlayerPrefab", "name": "Player Prefab", "tags": ["player", "jump"], "path": "Assets/Prefabs/Player.prefab"}
+  ]
+}
 ```
 
-## Swarm batch example
+## Unreal asset-aware example
 
 ```bash
 python -m translator.cli \
   --target python \
-  --batch-input batch.jsonl \
-  --batch-report artifacts/batch_report.json \
-  --swarm-workers 4
+  --engine unreal \
+  --asset-library ./my_assets.json \
+  --asset-budget 5 \
+  --prompt "Spawn enemy and play hit sound" \
+  --export-engine-manifest artifacts/unreal_manifest.json
 ```
 
-## Sandbox command example
+## Unity asset-aware example
 
 ```bash
 python -m translator.cli \
-  --target python \
-  --sandbox-command python3 /tmp/sandbox_cmd.py \
-  --prompt "Create player jump"
-```
-
-## Audio + multilingual example
-
-```bash
-python -m translator.cli \
-  --target python \
-  --source-language spanish \
-  --audio-input /tmp/nevora_audio_prompt.txt \
-  --audio-output artifacts/speech.wav
+  --target csharp \
+  --engine unity \
+  --asset-library ./my_assets.json \
+  --prompt "Player jump controller" \
+  --export-engine-manifest artifacts/unity_manifest.json
 ```
 
 ## Evaluation

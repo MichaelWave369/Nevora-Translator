@@ -40,6 +40,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--audio-output", help="Audio output path (best effort TTS; .txt fallback if unavailable)")
     parser.add_argument("--enable-rag-cache", action="store_true", help="Enable 12x12x12x12 lattice RAG cache during translation")
     parser.add_argument("--sandbox-command", nargs="+", help="Run a command in isolated VM-like temp sandbox")
+    parser.add_argument("--engine", choices=["unreal", "unity"], help="Engine asset manager integration target")
+    parser.add_argument("--asset-library", help="Path to user asset library JSON for engine-aware generation")
+    parser.add_argument("--asset-budget", type=int, default=5, help="Max assets to select from library")
+    parser.add_argument("--export-engine-manifest", help="Optional output path for Unreal/Unity asset manifest JSON")
     parser.add_argument(
         "--audio-output-language",
         default="english",
@@ -173,17 +177,34 @@ def main() -> None:
     if not prompt:
         raise ValueError("--prompt is required unless --batch-input or --audio-input is provided")
 
-    output = translator.translate(
-        prompt=prompt,
-        target=args.target,
-        mode=args.mode,
-        context=context,
-        refine=args.refine,
-        strict_safety=args.strict_safety,
-        source_language=args.source_language,
-        use_rag_cache=args.enable_rag_cache,
-    )
+    asset_result = None
+    if args.engine and args.asset_library:
+        asset_result = translator.translate_with_asset_library(
+            prompt=prompt,
+            target=args.target,
+            engine=args.engine,
+            asset_library_path=args.asset_library,
+            mode=args.mode,
+            source_language=args.source_language,
+            asset_budget=max(0, args.asset_budget),
+            use_rag_cache=args.enable_rag_cache,
+        )
+        output = asset_result["output"]
+    else:
+        output = translator.translate(
+            prompt=prompt,
+            target=args.target,
+            mode=args.mode,
+            context=context,
+            refine=args.refine,
+            strict_safety=args.strict_safety,
+            source_language=args.source_language,
+            use_rag_cache=args.enable_rag_cache,
+        )
     print(output)
+    if asset_result is not None:
+        print("\n[asset-selection]")
+        print(json.dumps(asset_result["selected_assets"], indent=2))
 
     if args.audio_output:
         audio_path = translator.synthesize_audio_output(
@@ -238,6 +259,21 @@ def main() -> None:
             ok, message = translator.verify_scaffold_build(scaffold_root, args.target)
             status = "ok" if ok else "warn"
             print(f"\n[verify-scaffold-build:{status}] {message}")
+
+    if args.export_engine_manifest:
+        if not args.engine or not args.asset_library:
+            raise ValueError("--export-engine-manifest requires --engine and --asset-library")
+        manifest_path = translator.export_engine_asset_manifest(
+            prompt=prompt,
+            target=args.target,
+            engine=args.engine,
+            asset_library_path=args.asset_library,
+            output_path=args.export_engine_manifest,
+            mode=args.mode,
+            source_language=args.source_language,
+            asset_budget=max(0, args.asset_budget),
+        )
+        print(f"\n[asset-manifest] written: {manifest_path}")
 
     if args.export_uasset_json:
         export_path = translator.export_unreal_uasset_payload(

@@ -336,3 +336,56 @@ def test_vm_sandbox_execution() -> None:
     ok, message = translator.run_in_vm_sandbox(["python3", "-c", "print('ok')"])
     assert ok
     assert "ok" in message
+
+
+def test_translate_with_unreal_asset_library(tmp_path) -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    lib = {
+        "unreal": [
+            {"id": "SM_Enemy", "name": "Enemy Mesh", "tags": ["enemy", "mesh"], "path": "/Game/Meshes/SM_Enemy"},
+            {"id": "SFX_Jump", "name": "Jump Sound", "tags": ["jump", "sound"], "path": "/Game/Audio/SFX_Jump"},
+        ],
+        "unity": [],
+    }
+    lib_path = tmp_path / "library.json"
+    lib_path.write_text(json.dumps(lib), encoding="utf-8")
+
+    result = translator.translate_with_asset_library(
+        prompt="Spawn enemy and play jump sound",
+        target="python",
+        engine="unreal",
+        asset_library_path=str(lib_path),
+    )
+    assert result["engine"] == "unreal"
+    assert len(result["selected_assets"]) >= 1
+    assert "GeneratedFeature" in result["output"]
+
+
+def test_export_unity_asset_manifest(tmp_path) -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    lib = {
+        "unreal": [],
+        "unity": [
+            {"id": "PlayerPrefab", "name": "Player Prefab", "tags": ["player", "jump"], "path": "Assets/Prefabs/Player.prefab"}
+        ],
+    }
+    lib_path = tmp_path / "library.json"
+    out_path = tmp_path / "unity_manifest.json"
+    lib_path.write_text(json.dumps(lib), encoding="utf-8")
+
+    written = translator.export_engine_asset_manifest(
+        prompt="Player jump",
+        target="csharp",
+        engine="unity",
+        asset_library_path=str(lib_path),
+        output_path=str(out_path),
+    )
+    payload = json.loads(Path(written).read_text(encoding="utf-8"))
+    assert payload["schema"] == "nevora.unity.asset.manifest.v1"
+    assert payload["assets"]
+
+
+def test_plan_cache_populated() -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    translator.build_generation_plan("Create jump", mode="gameplay")
+    assert ("Create jump", "gameplay") in translator._plan_cache

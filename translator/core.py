@@ -7,6 +7,7 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from hashlib import sha256
 from datetime import datetime, timezone
+from time import perf_counter
 from pathlib import Path
 from typing import Any, Optional
 
@@ -29,6 +30,7 @@ class EnglishToCodeTranslator:
     PLANNER_PROVIDERS = {"auto", "heuristic", "openai"}
     SOURCE_LANGUAGES = {"english", "spanish", "french", "german", "portuguese"}
     AUDIO_LANGUAGES = SOURCE_LANGUAGES
+    ASSET_ENGINES = {"unreal", "unity"}
     BLOCKED_PATTERNS = [
         "rm -rf /",
         "shutdown",
@@ -125,6 +127,7 @@ class EnglishToCodeTranslator:
         self._last_resolved_provider = "custom" if planner is not None else planner_provider
         self.renderers = build_registry()
         self._rag_lattice: dict[tuple[int, int, int, int], list[dict[str, str]]] = {}
+        self._plan_cache: dict[tuple[str, str], GenerationPlan] = {}
         self.lattice_shape = (12, 12, 12, 12)
 
     @property
@@ -275,6 +278,11 @@ class EnglishToCodeTranslator:
         )
 
     def build_generation_plan(self, prompt: str, mode: str = "gameplay") -> GenerationPlan:
+        cache_key = (prompt, mode)
+        cached = self._plan_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         intent = self.plan_intent(prompt, mode=mode)
         ir = self._build_ir(intent)
         steps = [
@@ -285,7 +293,12 @@ class EnglishToCodeTranslator:
             PlanStep("self-check", "Optional syntax/build verification"),
         ]
         state_model = {"active": "bool", "last_event": "string", "status": "string"}
-        return GenerationPlan(intent=intent, ir=ir, steps=steps, state_model=state_model)
+        plan = GenerationPlan(intent=intent, ir=ir, steps=steps, state_model=state_model)
+        self._plan_cache[cache_key] = plan
+        if len(self._plan_cache) > 256:
+            oldest = next(iter(self._plan_cache))
+            self._plan_cache.pop(oldest, None)
+        return plan
 
     def explain_plan(
         self,
@@ -357,6 +370,133 @@ class EnglishToCodeTranslator:
             except subprocess.TimeoutExpired:
                 return False, f"sandbox command timed out after {timeout_s}s"
 
+    def load_asset_library(self, asset_library_path: str) -> dict[str, list[dict[str, Any]]]:
+        source = Path(asset_library_path)
+        payload = json.loads(source.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("Asset library must be a JSON object keyed by engine")
+
+        library: dict[str, list[dict[str, Any]]] = {}
+        for engine in self.ASSET_ENGINES:
+            entries = payload.get(engine, [])
+            if not isinstance(entries, list):
+                raise ValueError(f"Asset library entry '{engine}' must be a list")
+            normalized: list[dict[str, Any]] = []
+            for item in entries:
+                if not isinstance(item, dict):
+                    continue
+                normalized.append({
+                    "id": str(item.get("id", "")),
+                    "name": str(item.get("name", "")),
+                    "tags": [str(t).lower() for t in item.get("tags", []) if str(t).strip()],
+                    "path": str(item.get("path", "")),
+                })
+            library[engine] = normalized
+        return library
+
+    def _select_assets_for_prompt(
+        self,
+        normalized_prompt: str,
+        engine: str,
+        asset_library: dict[str, list[dict[str, Any]]],
+        asset_budget: int = 5,
+    ) -> list[dict[str, Any]]:
+        tokens = set(re.findall(r"[a-zA-Z0-9_]+", normalized_prompt.lower()))
+        candidates = asset_library.get(engine, [])
+        scored: list[tuple[int, dict[str, Any]]] = []
+        for item in candidates:
+            score = 0
+            text_tokens = set(re.findall(r"[a-zA-Z0-9_]+", f"{item.get('name','')} {item.get('id','')}".lower()))
+            tags = set(str(t).lower() for t in item.get("tags", []))
+            score += len(tokens & text_tokens)
+            score += 2 * len(tokens & tags)
+            if score > 0:
+                scored.append((score, item))
+        scored.sort(key=lambda pair: pair[0], reverse=True)
+        return [item for _, item in scored[: max(0, asset_budget)]]
+
+    def translate_with_asset_library(
+        self,
+        prompt: str,
+        target: str,
+        engine: str,
+        asset_library_path: str,
+        mode: str = "gameplay",
+        source_language: str = "english",
+        asset_budget: int = 5,
+        use_rag_cache: bool = False,
+    ) -> dict[str, Any]:
+        normalized_engine = engine.strip().lower()
+        if normalized_engine not in self.ASSET_ENGINES:
+            raise ValueError(f"Unsupported engine '{engine}'. Supported: {', '.join(sorted(self.ASSET_ENGINES))}")
+
+        normalized_prompt = self._normalize_prompt_language(prompt, source_language=source_language)
+        library = self.load_asset_library(asset_library_path)
+        selected_assets = self._select_assets_for_prompt(normalized_prompt, normalized_engine, library, asset_budget=asset_budget)
+        asset_context = ""
+        if selected_assets:
+            asset_lines = [f"- {a.get('name') or a.get('id')} ({a.get('path')})" for a in selected_assets]
+            asset_context = "\n\nAvailable assets:\n" + "\n".join(asset_lines)
+
+        output = self.translate(
+            prompt=normalized_prompt + asset_context,
+            target=target,
+            mode=mode,
+            source_language="english",
+            use_rag_cache=use_rag_cache,
+        )
+        return {
+            "engine": normalized_engine,
+            "target": target,
+            "mode": mode,
+            "source_language": source_language,
+            "selected_assets": selected_assets,
+            "output": output,
+        }
+
+    def export_engine_asset_manifest(
+        self,
+        prompt: str,
+        target: str,
+        engine: str,
+        asset_library_path: str,
+        output_path: str,
+        mode: str = "gameplay",
+        source_language: str = "english",
+        asset_budget: int = 5,
+    ) -> str:
+        payload = self.translate_with_asset_library(
+            prompt=prompt,
+            target=target,
+            engine=engine,
+            asset_library_path=asset_library_path,
+            mode=mode,
+            source_language=source_language,
+            asset_budget=asset_budget,
+        )
+        destination = Path(output_path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if payload["engine"] == "unreal":
+            manifest = {
+                "schema": "nevora.unreal.asset.manifest.v1",
+                "prompt": prompt,
+                "mode": mode,
+                "target": target,
+                "assets": payload["selected_assets"],
+                "generated_code": payload["output"],
+            }
+        else:
+            manifest = {
+                "schema": "nevora.unity.asset.manifest.v1",
+                "prompt": prompt,
+                "mode": mode,
+                "target": target,
+                "assets": payload["selected_assets"],
+                "generated_code": payload["output"],
+            }
+        destination.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        return str(destination)
+
     def translate(
         self,
         prompt: str,
@@ -423,6 +563,7 @@ class EnglishToCodeTranslator:
         refine = bool(item.get("refine", False))
         source_language = str(item.get("source_language", default_source_language)).strip().lower()
 
+        started_at = perf_counter()
         output = self.translate(
             prompt=prompt,
             target=target,
@@ -433,6 +574,7 @@ class EnglishToCodeTranslator:
             source_language=source_language,
             use_rag_cache=True,
         )
+        elapsed_ms = round((perf_counter() - started_at) * 1000, 3)
         payload: dict[str, Any] = {
             "index": idx,
             "ok": True,
@@ -442,6 +584,7 @@ class EnglishToCodeTranslator:
             "resolved_provider": self._last_resolved_provider,
             "output": output,
             "lattice_bucket": list(self._lattice_bucket(prompt, target, mode, source_language)),
+            "elapsed_ms": elapsed_ms,
         }
 
         if verify_generated:
@@ -572,6 +715,7 @@ class EnglishToCodeTranslator:
                 lattice_bucket_counts[key] = lattice_bucket_counts.get(key, 0) + 1
 
         total = len(batch_results)
+        elapsed_values = [float(item.get("elapsed_ms", 0.0)) for item in batch_results if item.get("ok") and item.get("elapsed_ms") is not None]
         success_rate = (ok_count / total) if total else 0.0
         verify_output_rate = (verify_output_ok_count / total) if total else 0.0
         verify_build_rate = (verify_build_ok_count / total) if total else 0.0
@@ -590,6 +734,7 @@ class EnglishToCodeTranslator:
             "source_language_counts": source_language_counts,
             "lattice_shape": list(self.lattice_shape),
             "lattice_bucket_counts": lattice_bucket_counts,
+            "avg_elapsed_ms": round(sum(elapsed_values) / len(elapsed_values), 3) if elapsed_values else 0.0,
             "results": batch_results,
         }
         destination.write_text(json.dumps(summary, indent=2), encoding="utf-8")
