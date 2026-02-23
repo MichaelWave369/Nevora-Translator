@@ -482,3 +482,12 @@ def test_huggingface_provider_falls_back_without_transformers() -> None:
     output = translator.translate("Create jump", target="python")
     assert "GeneratedFeature" in output
     assert translator.last_resolved_provider in {"huggingface", "heuristic-fallback"}
+
+
+
+def test_claude_codegen_requires_api_key(monkeypatch) -> None:
+    from translator.generators.anthropic_codegen import generate_code_with_claude
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    with pytest.raises(RuntimeError):
+        generate_code_with_claude("Create jump", target="python")

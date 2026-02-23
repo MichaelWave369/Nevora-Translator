@@ -2,7 +2,7 @@
 
 Nevora converts natural-language prompts into starter code for multiple targets (`python`, `blueprint`, `cpp`, `csharp`, `javascript`, `gdscript`) with optional AI planners, batch workflows, and engine asset integration.
 
-## Next phase (v19) implemented
+## Next phase (v20) implemented
 
 ### 1) MVP free-LLM planner path (Hugging Face)
 - Added `HuggingFaceSemanticPlanner` (`translator/planners/huggingface_planner.py`) using HF text2text generation.
@@ -43,12 +43,20 @@ Nevora converts natural-language prompts into starter code for multiple targets 
 - Generated code templates are more complete and beginner-friendly with inline comments explaining each section.
 - Added a simple **Copy Code** button in the Streamlit UI for easy copy/paste into editors.
 
+
+### 9) Claude-powered real code generation in Streamlit
+- The Generate flow now supports direct Anthropic Claude generation using **`claude-haiku-4-5`**.
+- It reads API credentials from environment variable: `ANTHROPIC_API_KEY`.
+- System message enforces functional, beginner-friendly, commented code generation from plain-English requests.
+- Added a fallback engine (`nevora-template-fallback`) so deployments can still run without API credentials.
+
 ## Installation
 
 ```bash
 pip install -r requirements.txt
-# optional AI planners
+# optional expanded AI planner stack
 pip install -r requirements-llm.txt
+export ANTHROPIC_API_KEY="your_key_here"
 ```
 
 ## CLI quick start
@@ -64,6 +72,7 @@ python -m translator.cli \
 
 ```bash
 streamlit run app.py
+# choose generation engine: claude-haiku-4-5 (default)
 ```
 
 ## Prompt engineering tips (edge-case handling)
