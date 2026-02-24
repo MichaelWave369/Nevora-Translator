@@ -42,8 +42,12 @@ def _syntax_valid(target: str, output: str) -> bool:
     return True
 
 
+def _dataset_path() -> Path:
+    return Path(__file__).resolve().parent / "prompts" / "golden.json"
+
+
 def main() -> None:
-    dataset = json.loads(Path("eval/prompts/golden.json").read_text(encoding="utf-8"))
+    dataset = json.loads(_dataset_path().read_text(encoding="utf-8"))
     translator = EnglishToCodeTranslator(planner_provider="heuristic")
 
     total = len(dataset)

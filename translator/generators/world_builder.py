@@ -4,6 +4,9 @@ import json
 import os
 from typing import Any
 
+from translator.core import EnglishToCodeTranslator
+from translator.generators.multi_codegen import generate_code
+
 
 WORLD_BUILDER_SYSTEM_PROMPT = (
     "You are a project builder and code generator. "
@@ -73,7 +76,6 @@ def parse_world_builder_response(raw: str) -> dict[str, str]:
             result[key] = value
         return result
 
-    # Backward compatibility with previous world-specific key format.
     legacy_required = ["environment", "characters", "rules", "events", "main"]
     if all(k in payload for k in legacy_required):
         return {
@@ -118,15 +120,70 @@ def _call_claude(prompt: str, model: str, max_tokens: int) -> str:
     return raw
 
 
+def _fallback_structured_project(project_type: str, stages: list[tuple[str, str]]) -> dict[str, str]:
+    translator = EnglishToCodeTranslator(planner_provider="heuristic")
+    sections = []
+    for idx, (title, value) in enumerate(stages, start=1):
+        section_code = translator.translate(
+            prompt=f"{project_type} - {title}: {value}",
+            target="python",
+            mode="automation",
+        )
+        sections.append(section_code)
+    main_code = translator.translate(
+        prompt=f"Build runnable main app glue for {project_type} with stages: {stages}",
+        target="python",
+        mode="automation",
+    )
+    return {
+        "section_one": sections[0],
+        "section_two": sections[1],
+        "section_three": sections[2],
+        "section_four": sections[3],
+        "main": main_code,
+    }
+
+
+def generate_structured_project(
+    project_type: str,
+    stages: list[tuple[str, str]],
+    provider: str = "claude",
+    model: str | None = None,
+    ollama_base_url: str | None = None,
+    max_tokens: int = 4000,
+) -> dict[str, str]:
+    prompt = build_structured_project_prompt(project_type, stages)
+    normalized = provider.lower().strip()
+    if normalized == "nevora-template-fallback":
+        return _fallback_structured_project(project_type, stages)
+    if normalized == "claude":
+        raw = _call_claude(prompt, model=model or "claude-haiku-4-5", max_tokens=max_tokens)
+    else:
+        raw = generate_code(
+            provider=normalized,
+            prompt=prompt,
+            target="json",
+            mode="automation",
+            source_language="english",
+            model=model,
+            ollama_base_url=ollama_base_url,
+        )
+    return parse_world_builder_response(raw)
+
+
 def generate_structured_project_with_claude(
     project_type: str,
     stages: list[tuple[str, str]],
     model: str = "claude-haiku-4-5",
     max_tokens: int = 4000,
 ) -> dict[str, str]:
-    prompt = build_structured_project_prompt(project_type, stages)
-    raw = _call_claude(prompt, model=model, max_tokens=max_tokens)
-    return parse_world_builder_response(raw)
+    return generate_structured_project(
+        project_type=project_type,
+        stages=stages,
+        provider="claude",
+        model=model,
+        max_tokens=max_tokens,
+    )
 
 
 def generate_world_with_claude(

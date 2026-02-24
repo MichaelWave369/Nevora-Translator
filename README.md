@@ -17,8 +17,8 @@ Nevora converts natural-language prompts into starter code for multiple targets 
 - Added concrete example input/output pairs in `examples/pairs/`.
 
 ### 3) Dependencies expanded
-- Base dependencies now include `joblib`, `faiss-cpu`, and `streamlit`.
-- Optional LLM dependencies include `openai`, `transformers`, `torch`, `accelerate`.
+- Base dependencies now include `joblib`, `faiss-cpu`, `streamlit`, and runtime provider SDKs.
+- Optional LLM/tooling extras in `requirements-llm.txt` include `openai`, `transformers`, `torch`, `accelerate`, and `mypy` for gradual type checking.
 
 ### 4) Evaluation upgraded
 - `eval/run_eval.py` now reports:
@@ -183,4 +183,12 @@ python -m translator.cli \
 
 ```bash
 python eval/run_eval.py
+```
+
+
+## Optional static type checking (mypy)
+
+```bash
+pip install -r requirements-llm.txt
+mypy translator
 ```

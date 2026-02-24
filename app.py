@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import html
+
 import streamlit as st
 
 from translator.core import EnglishToCodeTranslator
 from translator.generators.anthropic_codegen import explain_code_with_claude
 from translator.generators.multi_codegen import generate_code
 from translator.generators.project_packager import package_single_file_project, package_world_builder_project
-from translator.generators.world_builder import generate_structured_project_with_claude
+from translator.generators.world_builder import generate_structured_project
 
 
 CATEGORY_EXAMPLES = {
@@ -339,7 +341,7 @@ if ui_mode == "Quick Generate":
         st.markdown("### Copy code")
         st.components.v1.html(
             f"""
-            <textarea id=\"nevora_code\" style=\"width:100%;height:180px;\">{output}</textarea>
+            <textarea id=\"nevora_code\" style=\"width:100%;height:180px;\">{html.escape(output)}</textarea>
             <button onclick=\"navigator.clipboard.writeText(document.getElementById('nevora_code').value)\" style=\"margin-top:8px;\">Copy Code</button>
             """,
             height=240,
@@ -397,14 +399,22 @@ else:
         stage_values.append((stage_title, st.session_state[state_key]))
 
     if st.button(selected_project["build_button"], type="primary"):
-        if generation_engine != "claude-haiku-4-5 (default)":
-            st.warning("Structured World Builder currently uses Claude for best assembly. Switching to Claude for this run.")
+        provider_map = {
+            "claude-haiku-4-5 (default)": "claude",
+            "openai": "openai",
+            "grok": "grok",
+            "gemini": "gemini",
+            "ollama (local)": "ollama",
+            "nevora-template-fallback": "nevora-template-fallback",
+        }
 
         try:
-            sections = generate_structured_project_with_claude(
+            sections = generate_structured_project(
                 project_type=selected_project["label"],
                 stages=stage_values,
-                model=model_name or "claude-haiku-4-5",
+                provider=provider_map[generation_engine],
+                model=model_name or ("claude-haiku-4-5" if provider_map[generation_engine] == "claude" else None),
+                ollama_base_url=ollama_base_url,
             )
         except Exception as exc:
             st.error(f"World Builder generation failed: {exc}. Ensure ANTHROPIC_API_KEY is set.")
@@ -433,7 +443,7 @@ else:
         st.markdown("### Copy full starter project")
         st.components.v1.html(
             f"""
-            <textarea id=\"nevora_world_code\" style=\"width:100%;height:260px;\">{combined}</textarea>
+            <textarea id=\"nevora_world_code\" style=\"width:100%;height:260px;\">{html.escape(combined)}</textarea>
             <button onclick=\"navigator.clipboard.writeText(document.getElementById('nevora_world_code').value)\" style=\"margin-top:8px;\">Copy Full Project</button>
             """,
             height=320,

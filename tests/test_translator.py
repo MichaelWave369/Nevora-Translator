@@ -295,9 +295,9 @@ def test_batch_report_contains_source_language_counts(tmp_path) -> None:
     assert payload["source_language_counts"]["english"] == 1
 
 
-def test_audio_input_txt_transcript() -> None:
+def test_audio_input_txt_transcript(tmp_path) -> None:
     translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
-    tmp = Path("/tmp/nevora_audio_prompt.txt")
+    tmp = tmp_path / "nevora_audio_prompt.txt"
     tmp.write_text("Cuando jugador saltar", encoding="utf-8")
     prompt = translator.transcribe_audio_input(str(tmp), source_language="spanish")
     out = translator.translate(prompt, target="python", source_language="spanish")
@@ -627,3 +627,30 @@ def test_package_world_builder_project_contains_required_files() -> None:
         assert "requirements.txt" in names
         assert "run.bat" in names
         assert "run.sh" in names
+
+
+def test_translate_batch_swarm_order_is_stable() -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    batch = [
+        {"prompt": "Create jump", "target": "python"},
+        {"prompt": "Spawn enemy when timer reaches zero", "target": "cpp"},
+        {"prompt": "When request arrives validate and respond", "target": "javascript"},
+    ]
+    results = translator.translate_batch(batch, default_target="python", swarm_workers=3)
+    assert [item["index"] for item in results] == [0, 1, 2]
+
+
+def test_world_builder_fallback_provider_output_shape() -> None:
+    from translator.generators.world_builder import generate_structured_project
+
+    sections = generate_structured_project(
+        project_type="📱 Personal Tool",
+        stages=[
+            ("What problem are you solving?", "I forget tasks"),
+            ("What information do you want to track?", "Tasks and due dates"),
+            ("How often do you use it?", "Daily"),
+            ("What should it show or tell you?", "A daily summary"),
+        ],
+        provider="nevora-template-fallback",
+    )
+    assert set(sections.keys()) == {"section_one", "section_two", "section_three", "section_four", "main"}

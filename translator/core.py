@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
+import shlex
 import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -11,6 +13,9 @@ from datetime import datetime, timezone
 from time import perf_counter
 from pathlib import Path
 from typing import Any, Optional
+
+
+logger = logging.getLogger(__name__)
 
 from translator.models import (
     EventSpec,
@@ -258,7 +263,8 @@ class EnglishToCodeTranslator:
             engine.save_to_file(text, str(destination))
             engine.runAndWait()
             return str(destination)
-        except Exception:
+        except Exception as exc:
+            logger.warning("Audio synthesis failed; writing text fallback", exc_info=exc)
             fallback = destination.with_suffix(destination.suffix + ".txt")
             fallback.write_text(text, encoding="utf-8")
             return str(fallback)
@@ -267,7 +273,8 @@ class EnglishToCodeTranslator:
         try:
             planner = self._get_planner()
             raw_intent = planner.plan(prompt, mode=mode)
-        except Exception:
+        except Exception as exc:
+            logger.warning("Planner failed; using heuristic fallback", exc_info=exc)
             self._last_resolved_provider = "heuristic-fallback"
             raw_intent = self._heuristic.plan(prompt, mode=mode)
         return self._canonicalize_intent(raw_intent)
@@ -607,14 +614,14 @@ class EnglishToCodeTranslator:
             checklist.append("Ensure asset-library JSON is current and paths resolve in project.")
             if has_asset_library:
                 commands.append(
-                    f"python -m translator.cli --target {target} --engine {engine} --asset-library ./assets.json --prompt '{prompt}' --export-engine-manifest artifacts/{engine}_manifest.json"
+                    f"python -m translator.cli --target {shlex.quote(target)} --engine {shlex.quote(engine)} --asset-library ./assets.json --prompt {shlex.quote(prompt)} --export-engine-manifest artifacts/{engine}_manifest.json"
                 )
 
         if batch_report:
             analysis = self.analyze_batch_report(batch_report)
             checklist.extend(analysis["recommendations"])
             commands.append(
-                f"python -m translator.cli --target {target} --batch-input batch.jsonl --swarm-workers {analysis['suggested_swarm_workers']} --batch-report artifacts/batch_report.json"
+                f"python -m translator.cli --target {shlex.quote(target)} --batch-input batch.jsonl --swarm-workers {analysis['suggested_swarm_workers']} --batch-report artifacts/batch_report.json"
             )
 
         return {
@@ -684,10 +691,9 @@ class EnglishToCodeTranslator:
             if float(batch_report.get("success_rate", 0.0)) < 1.0:
                 suggestions.append("Batch report indicates failures; inspect per-item errors and consider --batch-fail-fast during debugging.")
 
-        safe_prompt = prompt.replace("'", "\\'")
         suggested_command = (
-            f"python -m translator.cli --target {target} --mode {mode} "
-            f"--prompt '{safe_prompt}' --verify --enable-rag-cache"
+            f"python -m translator.cli --target {shlex.quote(target)} --mode {shlex.quote(mode)} "
+            f"--prompt {shlex.quote(prompt)} --verify --enable-rag-cache"
         )
 
         return {
@@ -849,6 +855,7 @@ class EnglishToCodeTranslator:
         default_source_language: str = "english",
         swarm_workers: int = 1,
     ) -> list[dict[str, Any]]:
+        """Translate items in order with optional swarm parallelism."""
         results: list[dict[str, Any]] = []
         artifacts_root = Path(artifact_dir) if artifact_dir else None
         if artifacts_root:
@@ -899,9 +906,15 @@ class EnglishToCodeTranslator:
             for idx in range(len(items)):
                 if idx in ordered:
                     results.append(ordered[idx])
+
+        expected = list(range(len(results)))
+        actual = [int(item.get("index", -1)) for item in results]
+        if actual != expected:
+            raise RuntimeError(f"translate_batch ordering mismatch: expected {expected} got {actual}")
         return results
 
     def write_batch_report(self, batch_results: list[dict[str, Any]], output_file: str) -> str:
+        """Write batch results and aggregate metrics to JSON."""
         destination = Path(output_file)
         destination.parent.mkdir(parents=True, exist_ok=True)
         ok_count = sum(1 for r in batch_results if r.get("ok"))
