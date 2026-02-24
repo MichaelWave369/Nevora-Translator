@@ -1,0 +1,663 @@
+import json
+from pathlib import Path
+
+import pytest
+
+from translator.core import EnglishToCodeTranslator
+from translator.models import ParsedIntent
+from translator.planners.heuristic import HeuristicPlanner
+
+
+class BrokenPlanner:
+    def plan(self, prompt: str, mode: str = "gameplay") -> ParsedIntent:
+        return ParsedIntent(entities=[1, 2], actions=["jump"], conditions=["when"], outputs=[])
+
+
+def test_pipeline_translation_and_modes() -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    out = translator.translate(
+        prompt="When request arrives validate and respond",
+        target="python",
+        mode="web-backend",
+    )
+    assert "GeneratedFeature" in out
+    assert "Mode: web-backend" in out
+    assert "IR:" in out
+
+
+def test_explain_plan_returns_ir_and_steps() -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    explanation = translator.explain_plan(
+        prompt="Spawn enemy when timer reaches zero",
+        target="cpp",
+        mode="gameplay",
+    )
+    assert explanation["target"] == "cpp"
+    assert explanation["planner_provider"] == "auto"
+    assert explanation["resolved_provider"] in {"custom", "heuristic", "heuristic-fallback", "openai"}
+    assert "intent" in explanation
+    assert "ir" in explanation
+    assert len(explanation["steps"]) >= 3
+
+
+def test_canonical_schema_normalizes_values() -> None:
+    translator = EnglishToCodeTranslator(planner=BrokenPlanner())
+    intent = translator.plan_intent("jump", mode="gameplay")
+    assert intent.entities == ["1", "2"]
+    assert intent.outputs == ["state"]
+
+
+def test_new_target_registry_renders() -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    prompt = "Spawn enemy when timer reaches zero"
+
+    assert "GeneratedFeature" in translator.translate(prompt=prompt, target="cpp")
+    assert "public class GeneratedFeature" in translator.translate(prompt=prompt, target="csharp")
+    assert "class GeneratedFeature" in translator.translate(prompt=prompt, target="javascript")
+    assert "extends Node" in translator.translate(prompt=prompt, target="gdscript")
+
+
+def test_unreal_uasset_payload_export_v2_contains_ir(tmp_path) -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    target = tmp_path / "bp_feature.json"
+
+    result = translator.export_unreal_uasset_payload(
+        prompt="When player collides with enemy play hit animation",
+        output_path=str(target),
+        blueprint_name="BP_TestFeature",
+    )
+
+    assert result.endswith("bp_feature.json")
+    data = json.loads(target.read_text(encoding="utf-8"))
+    assert data["schema"] == "nevora.unreal.blueprint.graph.v2"
+    assert data["blueprint_name"] == "BP_TestFeature"
+    assert isinstance(data["nodes"], list)
+    assert isinstance(data["edges"], list)
+    assert "ir" in data
+
+
+def test_scaffold_project_and_verify_python(tmp_path) -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    root = translator.scaffold_project(
+        prompt="Create a player that jumps",
+        target="python",
+        output_dir=str(tmp_path / "pyproj"),
+    )
+    assert (tmp_path / "pyproj" / "src" / "generated_feature.py").exists()
+    assert root.endswith("pyproj")
+    ok, _ = translator.verify_scaffold(root, "python")
+    assert ok
+
+
+def test_verify_scaffold_build_python(tmp_path) -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    root = translator.scaffold_project(
+        prompt="Create a player that jumps",
+        target="python",
+        output_dir=str(tmp_path / "pyproj"),
+    )
+    ok, message = translator.verify_scaffold_build(root, "python")
+    assert ok, message
+
+
+def test_refine_with_context_changes_prompt_usage() -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    out = translator.translate(
+        prompt="add saving",
+        target="python",
+        mode="automation",
+        context="Previous output had no persistence",
+        refine=True,
+    )
+    assert "Previous output context" in out
+
+
+def test_verify_python_passes() -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    output = translator.translate("Create jump", "python")
+    ok, _ = translator.verify_output(output, "python")
+    assert ok
+
+
+def test_deterministic_translation_for_eval_signal() -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    a = translator.translate("Create a player jump on space and play sound", "python")
+    b = translator.translate("Create a player jump on space and play sound", "python")
+    assert a == b
+
+
+def test_planner_provider_heuristic_is_selectable() -> None:
+    translator = EnglishToCodeTranslator(planner_provider="heuristic")
+    out = translator.translate("Create a player that can jump", "python")
+    assert "GeneratedFeature" in out
+    assert translator.last_resolved_provider == "heuristic"
+
+
+def test_strict_safety_blocks_unsafe_prompt() -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    with pytest.raises(ValueError):
+        translator.translate("Please run rm -rf / immediately", "python", strict_safety=True)
+
+
+def test_batch_translate_and_report(tmp_path) -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    batch = [
+        {"prompt": "Create a player that can jump", "target": "python"},
+        {"prompt": "Spawn enemy when timer reaches zero", "target": "cpp"},
+    ]
+    results = translator.translate_batch(batch, default_target="python")
+    assert len(results) == 2
+    assert all(item["ok"] for item in results)
+
+    report_path = translator.write_batch_report(results, str(tmp_path / "report.json"))
+    payload = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
+    assert report_path.endswith("report.json")
+    assert payload["total"] == 2
+    assert payload["ok"] == 2
+
+
+def test_batch_translate_with_artifacts_and_explain(tmp_path) -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    batch = [
+        {"prompt": "Create a player that can jump", "target": "python"},
+        {"prompt": "Spawn enemy when timer reaches zero", "target": "cpp"},
+    ]
+    artifact_dir = tmp_path / "artifacts"
+    results = translator.translate_batch(
+        batch,
+        default_target="python",
+        artifact_dir=str(artifact_dir),
+        include_explain=True,
+    )
+    assert len(results) == 2
+    assert all(item["ok"] for item in results)
+    assert all("artifact_output_file" in item for item in results)
+    assert all("artifact_plan_file" in item for item in results)
+    assert all(Path(item["artifact_output_file"]).exists() for item in results)
+    assert all(Path(item["artifact_plan_file"]).exists() for item in results)
+
+
+def test_batch_report_contains_generated_at(tmp_path) -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    results = [{"index": 0, "ok": True, "target": "python", "mode": "gameplay", "output": "x"}]
+    report = translator.write_batch_report(results, str(tmp_path / "batch.json"))
+    payload = json.loads(Path(report).read_text(encoding="utf-8"))
+    assert "generated_at" in payload
+
+
+def test_batch_fail_fast_stops_after_first_error() -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    batch = [
+        {"prompt": "Please run rm -rf / immediately", "target": "python"},
+        {"prompt": "Create a player that can jump", "target": "python"},
+    ]
+    results = translator.translate_batch(
+        batch,
+        default_target="python",
+        strict_safety=True,
+        fail_fast=True,
+    )
+    assert len(results) == 1
+    assert results[0]["ok"] is False
+
+
+def test_batch_report_contains_rates_and_counts(tmp_path) -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    results = [
+        {"index": 0, "ok": True, "target": "python", "mode": "gameplay", "resolved_provider": "heuristic"},
+        {"index": 1, "ok": False, "target": "cpp", "mode": "gameplay", "resolved_provider": "heuristic-fallback"},
+    ]
+    report = translator.write_batch_report(results, str(tmp_path / "batch.json"))
+    payload = json.loads(Path(report).read_text(encoding="utf-8"))
+    assert payload["success_rate"] == 0.5
+    assert payload["target_counts"]["python"] == 1
+    assert payload["target_counts"]["cpp"] == 1
+    assert payload["resolved_provider_counts"]["heuristic"] == 1
+
+
+def test_batch_translate_with_verify_flags(tmp_path) -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    batch = [{"prompt": "Create a player that can jump", "target": "python"}]
+    results = translator.translate_batch(
+        batch,
+        default_target="python",
+        verify_generated=True,
+        verify_build=True,
+        artifact_dir=str(tmp_path / "artifacts"),
+    )
+    assert len(results) == 1
+    assert results[0]["verify_output_ok"] is True
+    assert "verify_build_ok" in results[0]
+
+
+def test_batch_report_contains_verify_metrics(tmp_path) -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    results = [
+        {
+            "index": 0,
+            "ok": True,
+            "target": "python",
+            "mode": "gameplay",
+            "resolved_provider": "heuristic",
+            "verify_output_ok": True,
+            "verify_build_ok": True,
+        },
+        {
+            "index": 1,
+            "ok": False,
+            "target": "cpp",
+            "mode": "gameplay",
+            "resolved_provider": "heuristic-fallback",
+            "verify_output_ok": False,
+            "verify_build_ok": False,
+        },
+    ]
+    report = translator.write_batch_report(results, str(tmp_path / "batch_verify.json"))
+    payload = json.loads(Path(report).read_text(encoding="utf-8"))
+    assert payload["verify_output_ok"] == 1
+    assert payload["verify_build_ok"] == 1
+    assert payload["verify_output_rate"] == 0.5
+    assert payload["verify_build_rate"] == 0.5
+
+
+def test_multilingual_spanish_prompt_translation() -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    out = translator.translate(
+        prompt="Cuando jugador saltar",
+        target="python",
+        source_language="spanish",
+    )
+    assert "player" in out.lower()
+    assert "jump" in out.lower()
+
+
+def test_explain_plan_includes_normalized_prompt() -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    explanation = translator.explain_plan(
+        prompt="Quand joueur sauter",
+        target="python",
+        source_language="french",
+    )
+    assert explanation["source_language"] == "french"
+    assert "player" in explanation["normalized_prompt"].lower()
+
+
+def test_batch_report_contains_source_language_counts(tmp_path) -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    batch = [
+        {"prompt": "Cuando jugador saltar", "target": "python", "source_language": "spanish"},
+        {"prompt": "Spawn enemy when timer reaches zero", "target": "cpp", "source_language": "english"},
+    ]
+    results = translator.translate_batch(batch, default_target="python")
+    report = translator.write_batch_report(results, str(tmp_path / "lang_batch.json"))
+    payload = json.loads(Path(report).read_text(encoding="utf-8"))
+    assert payload["source_language_counts"]["spanish"] == 1
+    assert payload["source_language_counts"]["english"] == 1
+
+
+def test_audio_input_txt_transcript(tmp_path) -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    tmp = tmp_path / "nevora_audio_prompt.txt"
+    tmp.write_text("Cuando jugador saltar", encoding="utf-8")
+    prompt = translator.transcribe_audio_input(str(tmp), source_language="spanish")
+    out = translator.translate(prompt, target="python", source_language="spanish")
+    assert "player" in out.lower()
+
+
+def test_audio_output_fallback_txt(tmp_path) -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    output_audio = tmp_path / "speech.wav"
+    written = translator.synthesize_audio_output("hello world", str(output_audio), output_language="english")
+    assert Path(written).exists()
+
+
+def test_rag_lattice_store_and_retrieve() -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    translator.translate("Create jump", "python", use_rag_cache=True)
+    neighbors = translator.rag_retrieve("Create jump", "python")
+    assert neighbors
+    assert neighbors[-1]["target"] == "python"
+
+
+def test_translate_batch_swarm_workers() -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    batch = [
+        {"prompt": "Create a player that can jump", "target": "python"},
+        {"prompt": "Spawn enemy when timer reaches zero", "target": "cpp"},
+        {"prompt": "When request arrives validate and respond", "target": "javascript"},
+    ]
+    results = translator.translate_batch(batch, default_target="python", swarm_workers=3)
+    assert len(results) == 3
+    assert all("lattice_bucket" in item for item in results)
+
+
+def test_vm_sandbox_execution() -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    ok, message = translator.run_in_vm_sandbox(["python3", "-c", "print('ok')"])
+    assert ok
+    assert "ok" in message
+
+
+def test_translate_with_unreal_asset_library(tmp_path) -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    lib = {
+        "unreal": [
+            {"id": "SM_Enemy", "name": "Enemy Mesh", "tags": ["enemy", "mesh"], "path": "/Game/Meshes/SM_Enemy"},
+            {"id": "SFX_Jump", "name": "Jump Sound", "tags": ["jump", "sound"], "path": "/Game/Audio/SFX_Jump"},
+        ],
+        "unity": [],
+    }
+    lib_path = tmp_path / "library.json"
+    lib_path.write_text(json.dumps(lib), encoding="utf-8")
+
+    result = translator.translate_with_asset_library(
+        prompt="Spawn enemy and play jump sound",
+        target="python",
+        engine="unreal",
+        asset_library_path=str(lib_path),
+    )
+    assert result["engine"] == "unreal"
+    assert len(result["selected_assets"]) >= 1
+    assert "GeneratedFeature" in result["output"]
+
+
+def test_export_unity_asset_manifest(tmp_path) -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    lib = {
+        "unreal": [],
+        "unity": [
+            {"id": "PlayerPrefab", "name": "Player Prefab", "tags": ["player", "jump"], "path": "Assets/Prefabs/Player.prefab"}
+        ],
+    }
+    lib_path = tmp_path / "library.json"
+    out_path = tmp_path / "unity_manifest.json"
+    lib_path.write_text(json.dumps(lib), encoding="utf-8")
+
+    written = translator.export_engine_asset_manifest(
+        prompt="Player jump",
+        target="csharp",
+        engine="unity",
+        asset_library_path=str(lib_path),
+        output_path=str(out_path),
+    )
+    payload = json.loads(Path(written).read_text(encoding="utf-8"))
+    assert payload["schema"] == "nevora.unity.asset.manifest.v1"
+    assert payload["assets"]
+
+
+def test_plan_cache_populated() -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    translator.build_generation_plan("Create jump", mode="gameplay")
+    assert ("Create jump", "gameplay") in translator._plan_cache
+
+
+def test_assistant_guide_contains_suggestions() -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    guide = translator.assistant_guide(
+        prompt="Create player jump",
+        target="python",
+        mode="gameplay",
+    )
+    assert guide["target"] == "python"
+    assert guide["suggestions"]
+    assert "suggested_command" in guide
+
+
+def test_warm_plan_cache_counts_entries() -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    result = translator.warm_plan_cache(["Create jump", "Create jump", "Spawn enemy"], mode="gameplay")
+    assert result["cache_size"] >= 2
+    assert result["warmed"] >= 2
+
+
+def test_suggest_swarm_workers_bounds() -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    workers = translator.suggest_swarm_workers(batch_size=100, max_workers=4)
+    assert 1 <= workers <= 4
+
+
+def test_analyze_batch_report_recommendations() -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    advice = translator.analyze_batch_report(
+        {
+            "total": 10,
+            "success_rate": 0.7,
+            "avg_elapsed_ms": 300.0,
+            "verify_output_rate": 0.8,
+            "verify_build_rate": 0.9,
+        }
+    )
+    assert advice["suggested_swarm_workers"] >= 1
+    assert advice["recommendations"]
+
+
+def test_assistant_guide_includes_report_advice() -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    guide = translator.assistant_guide(
+        prompt="Create player jump",
+        target="python",
+        batch_report={"total": 3, "success_rate": 1.0, "avg_elapsed_ms": 10.0, "verify_output_rate": 1.0, "verify_build_rate": 1.0},
+    )
+    assert guide["report_advice"] is not None
+
+
+def test_write_batch_report_includes_p95(tmp_path) -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    results = [
+        {"index": 0, "ok": True, "target": "python", "mode": "gameplay", "elapsed_ms": 10.0},
+        {"index": 1, "ok": True, "target": "python", "mode": "gameplay", "elapsed_ms": 30.0},
+        {"index": 2, "ok": True, "target": "python", "mode": "gameplay", "elapsed_ms": 50.0},
+    ]
+    report_path = translator.write_batch_report(results, str(tmp_path / "batch.json"))
+    payload = json.loads(Path(report_path).read_text(encoding="utf-8"))
+    assert "p95_elapsed_ms" in payload
+
+
+def test_benchmark_swarm_configs_returns_best() -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    batch = [
+        {"prompt": "Create jump", "target": "python"},
+        {"prompt": "Spawn enemy when timer reaches zero", "target": "cpp"},
+    ]
+    bench = translator.benchmark_swarm_configs(batch, default_target="python", worker_candidates=[1, 2])
+    assert bench["batch_size"] == 2
+    assert bench["timings"]
+    assert bench["best_workers"] in {1, 2}
+
+
+def test_generate_assistant_runbook_includes_checklist() -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    runbook = translator.generate_assistant_runbook(
+        prompt="Create jump",
+        target="python",
+        batch_report={"total": 2, "success_rate": 1.0, "avg_elapsed_ms": 10.0, "verify_output_rate": 1.0, "verify_build_rate": 1.0},
+    )
+    assert runbook["title"] == "Nevora Assistant Runbook"
+    assert runbook["checklist"]
+    assert runbook["commands"]
+
+
+def test_huggingface_provider_falls_back_without_transformers() -> None:
+    translator = EnglishToCodeTranslator(planner_provider="huggingface")
+    output = translator.translate("Create jump", target="python")
+    assert "GeneratedFeature" in output
+    assert translator.last_resolved_provider in {"huggingface", "heuristic-fallback"}
+
+
+
+def test_claude_codegen_requires_api_key(monkeypatch) -> None:
+    from translator.generators.anthropic_codegen import generate_code_with_claude
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    with pytest.raises(RuntimeError):
+        generate_code_with_claude("Create jump", target="python")
+
+
+def test_multi_codegen_openai_requires_key(monkeypatch) -> None:
+    from translator.generators.multi_codegen import generate_code_with_openai
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    with pytest.raises(RuntimeError):
+        generate_code_with_openai("Create jump", target="python")
+
+
+def test_multi_codegen_grok_requires_key(monkeypatch) -> None:
+    from translator.generators.multi_codegen import generate_code_with_grok
+
+    monkeypatch.delenv("XAI_API_KEY", raising=False)
+    with pytest.raises(RuntimeError):
+        generate_code_with_grok("Create jump", target="python")
+
+
+def test_multi_codegen_gemini_requires_key(monkeypatch) -> None:
+    from translator.generators.multi_codegen import generate_code_with_gemini
+
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    with pytest.raises(RuntimeError):
+        generate_code_with_gemini("Create jump", target="python")
+
+
+def test_multi_codegen_dispatch_unknown_provider() -> None:
+    from translator.generators.multi_codegen import generate_code
+
+    with pytest.raises(ValueError):
+        generate_code("unknown", "Create jump", target="python")
+
+
+
+def test_world_builder_prompt_contains_all_stages() -> None:
+    from translator.generators.world_builder import build_world_builder_prompt
+
+    prompt = build_world_builder_prompt(
+        environment="Forest",
+        characters="Player and enemy",
+        rules="Health and gravity",
+        events="Enemy attacks",
+    )
+    assert "1) Environment" in prompt
+    assert "2) Characters" in prompt
+    assert "3) Rules" in prompt
+    assert "4) Events" in prompt
+
+
+def test_world_builder_parse_response_valid() -> None:
+    from translator.generators.world_builder import parse_world_builder_response
+
+    raw = '{"environment":"env code","characters":"char code","rules":"rules code","events":"events code","main":"main code"}'
+    parsed = parse_world_builder_response(raw)
+    assert parsed["section_one"] == "env code"
+    assert parsed["main"] == "main code"
+
+
+def test_world_builder_parse_response_missing_keys() -> None:
+    from translator.generators.world_builder import parse_world_builder_response
+
+    with pytest.raises(RuntimeError):
+        parse_world_builder_response('{"environment":"x"}')
+
+
+
+def test_structured_project_prompt_requires_4_stages() -> None:
+    from translator.generators.world_builder import build_structured_project_prompt
+
+    with pytest.raises(ValueError):
+        build_structured_project_prompt("Test", [("one", "x")])
+
+
+def test_world_builder_parse_legacy_format() -> None:
+    from translator.generators.world_builder import parse_world_builder_response
+
+    legacy = '{"environment":"env","characters":"chars","rules":"rules","events":"events","main":"main"}'
+    parsed = parse_world_builder_response(legacy)
+    assert parsed["section_one"] == "env"
+    assert parsed["section_four"] == "events"
+
+
+def test_claude_explain_requires_api_key(monkeypatch) -> None:
+    from translator.generators.anthropic_codegen import explain_code_with_claude
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    with pytest.raises(RuntimeError):
+        explain_code_with_claude("print('hello')", user_goal="say hello")
+
+
+def test_package_single_file_project_contains_required_files() -> None:
+    import io
+    import zipfile
+
+    from translator.generators.project_packager import package_single_file_project
+
+    payload = package_single_file_project(
+        code="print('hello')\n",
+        prompt="Say hello",
+        target="python",
+    )
+    with zipfile.ZipFile(io.BytesIO(payload), "r") as zf:
+        names = set(zf.namelist())
+        assert "main.py" in names
+        assert "README.txt" in names
+        assert "requirements.txt" in names
+        assert "run.bat" in names
+        assert "run.sh" in names
+
+
+def test_package_world_builder_project_contains_required_files() -> None:
+    import io
+    import zipfile
+
+    from translator.generators.project_packager import package_world_builder_project
+
+    files = {
+        "section_one.py": "# env",
+        "section_two.py": "# chars",
+        "section_three.py": "# rules",
+        "section_four.py": "# events",
+        "main.py": "print('run')",
+    }
+    payload = package_world_builder_project(
+        files=files,
+        project_title="Nevora Game World",
+        app_summary="simple world",
+    )
+    with zipfile.ZipFile(io.BytesIO(payload), "r") as zf:
+        names = set(zf.namelist())
+        assert set(files.keys()).issubset(names)
+        assert "README.txt" in names
+        assert "requirements.txt" in names
+        assert "run.bat" in names
+        assert "run.sh" in names
+
+
+def test_translate_batch_swarm_order_is_stable() -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    batch = [
+        {"prompt": "Create jump", "target": "python"},
+        {"prompt": "Spawn enemy when timer reaches zero", "target": "cpp"},
+        {"prompt": "When request arrives validate and respond", "target": "javascript"},
+    ]
+    results = translator.translate_batch(batch, default_target="python", swarm_workers=3)
+    assert [item["index"] for item in results] == [0, 1, 2]
+
+
+def test_world_builder_fallback_provider_output_shape() -> None:
+    from translator.generators.world_builder import generate_structured_project
+
+    sections = generate_structured_project(
+        project_type="📱 Personal Tool",
+        stages=[
+            ("What problem are you solving?", "I forget tasks"),
+            ("What information do you want to track?", "Tasks and due dates"),
+            ("How often do you use it?", "Daily"),
+            ("What should it show or tell you?", "A daily summary"),
+        ],
+        provider="nevora-template-fallback",
+    )
+    assert set(sections.keys()) == {"section_one", "section_two", "section_three", "section_four", "main"}
+
+
+def test_python_renderer_uses_list_literals_for_entities_outputs() -> None:
+    translator = EnglishToCodeTranslator(planner=HeuristicPlanner())
+    out = translator.translate("Create a player that can jump", target="python")
+    assert "self.entities = [" in out
+    assert "self.outputs = [" in out
