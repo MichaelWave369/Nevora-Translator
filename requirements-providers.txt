@@ -1,0 +1,4 @@
+# Optional cloud/local provider SDKs
+anthropic>=0.34.2
+openai>=1.52.0
+google-generativeai>=0.8.3

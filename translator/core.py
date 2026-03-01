@@ -265,7 +265,7 @@ class EnglishToCodeTranslator:
             engine.runAndWait()
             return str(destination)
         except Exception as exc:
-            logger.warning("Audio synthesis failed; writing text fallback", exc_info=exc)
+            logger.warning("Audio synthesis failed; writing text fallback: %s", exc)
             fallback = destination.with_suffix(destination.suffix + ".txt")
             fallback.write_text(text, encoding="utf-8")
             return str(fallback)
@@ -275,7 +275,7 @@ class EnglishToCodeTranslator:
             planner = self._get_planner()
             raw_intent = planner.plan(prompt, mode=mode)
         except Exception as exc:
-            logger.warning("Planner failed; using heuristic fallback", exc_info=exc)
+            logger.warning("Planner failed; using heuristic fallback: %s", exc)
             self._last_resolved_provider = "heuristic-fallback"
             raw_intent = self._heuristic.plan(prompt, mode=mode)
         return self._canonicalize_intent(raw_intent)

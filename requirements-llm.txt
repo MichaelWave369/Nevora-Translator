@@ -1,5 +1,4 @@
-openai>=1.52.0
+# Optional heavyweight planner stack
 transformers>=4.45.0
 torch>=2.4.0
 accelerate>=0.34.2
-mypy>=1.11.2
