@@ -451,7 +451,7 @@ else:
                 ollama_base_url=ollama_base_url,
             )
         except Exception as exc:
-            st.error(f"World Builder generation failed: {exc}. Ensure ANTHROPIC_API_KEY is set.")
+            st.error(f"World Builder generation failed: {exc}. Set provider keys, check Ollama, or switch to nevora-template-fallback.")
             st.stop()
 
         labels = [selected_project["stage_titles"][0], selected_project["stage_titles"][1], selected_project["stage_titles"][2], selected_project["stage_titles"][3]]
